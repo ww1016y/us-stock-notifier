@@ -75,6 +75,7 @@ def summarize_with_gemini(data):
     if not GEMINI_API_KEY:
         return "Gemini API 키가 없습니다."
     
+    # 최신 SDK 클라이언트 생성
     client = genai.Client(api_key=GEMINI_API_KEY)
     
     prompt = f"""
@@ -90,28 +91,24 @@ def summarize_with_gemini(data):
     4. 친절한 한국어 사용.
     """
     
-    # 여러 모델과 재시도 로직
-    models = ['gemini-1.5-flash', 'gemini-2.0-flash'] # 1.5가 보통 할당량이 더 여유롭습니다.
+    # 모델명 후보군 (표준 명칭 사용)
+    # 404 에러를 방지하기 위해 'models/' 접두사를 붙이거나 생략하는 케이스 모두 고려
+    model_candidates = ['gemini-1.5-flash', 'gemini-1.5-pro']
     
-    for model_id in models:
-        for attempt in range(3): # 최대 3번 재시도
-            try:
-                print(f"Attempting {model_id} (Attempt {attempt+1})...")
-                response = client.models.generate_content(
-                    model=model_id,
-                    contents=prompt
-                )
-                if response.text:
-                    return response.text
-            except Exception as e:
-                print(f"Error with {model_id}: {e}")
-                if "429" in str(e): # 할당량 초과 시 대기
-                    print("Quota exceeded. Waiting 10 seconds...")
-                    time.sleep(10)
-                else:
-                    break # 다른 에러면 다음 모델로
-                    
-    return f"AI 요약 실패. 원본 데이터 송부: {data}"
+    for model_id in model_candidates:
+        try:
+            print(f"Final Attempt with model: {model_id}...")
+            response = client.models.generate_content(
+                model=model_id,
+                contents=prompt
+            )
+            if response and response.text:
+                return response.text
+        except Exception as e:
+            print(f"Failed with {model_id}: {e}")
+            time.sleep(2) # 짧은 대기 후 다음 모델 시도
+            
+    return f"AI 요약 시스템 일시 중단. 원본 데이터로 대체합니다.\n\n{data}"
 
 def send_email(content):
     if not all([EMAIL_USER, EMAIL_PASS, RECEIVER_EMAIL]):
@@ -132,6 +129,10 @@ def send_email(content):
         print(f"이메일 발송 실패: {e}")
 
 if __name__ == "__main__":
+    print("Market Data Collecting...")
     data = get_market_data()
+    print("AI Summarizing...")
     summary = summarize_with_gemini(data)
+    print("Email Sending...")
     send_email(summary)
+    print("Done!")
