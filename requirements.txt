@@ -1,5 +1,5 @@
 yfinance
 pandas
 requests
-google-generativeai
+google-genai
 beautifulsoup4

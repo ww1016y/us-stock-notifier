@@ -1,6 +1,6 @@
 import yfinance as yf
 import pandas as pd
-import google.generativeai as genai
+from google import genai
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -15,7 +15,6 @@ RECEIVER_EMAIL = os.getenv("RECEIVER_EMAIL")
 
 # --- 1. 데이터 수집 함수 ---
 def get_market_data():
-    # 주요 테마/섹터 ETF 리스트 (AI, 반도체, 양자, 스페이스 등)
     theme_etfs = {
         "AI/Robotics": "BOTZ",
         "Semiconductor": "SMH",
@@ -28,8 +27,6 @@ def get_market_data():
     }
     
     report_data = []
-    
-    # 1.1 섹터별 성과 분석
     for theme, ticker in theme_etfs.items():
         try:
             etf = yf.Ticker(ticker)
@@ -51,9 +48,8 @@ def get_market_data():
         except Exception as e:
             print(f"Error fetching {ticker}: {e}")
 
-    # 1.2 거래량 급증 개별 종목 (S&P 500 내 일부 예시 또는 Trending)
-    # 실제로는 더 넓은 범위를 탐색할 수 있으나, API 제한을 고려해 Trending Tickers 사용 권장
     try:
+        # Trending 데이터 가져오기 (Yahoo Finance 검색 API 활용)
         trending = yf.Search("Trending", max_results=10).quotes
         for stock in trending:
             symbol = stock.get('symbol')
@@ -63,8 +59,7 @@ def get_market_data():
             if len(h) < 2: continue
             
             change = ((h['Close'].iloc[-1] - h['Close'].iloc[-2]) / h['Close'].iloc[-2]) * 100
-            # 가격 상승과 거래량 동반 종목 필터링 (간이 예시)
-            if change > 3: # 3% 이상 상승 종목만
+            if abs(change) > 3: # 3% 이상 급등락 종목
                 report_data.append({
                     "Type": "Stock",
                     "Name": symbol,
@@ -77,41 +72,45 @@ def get_market_data():
         
     return report_data
 
-# --- 2. Gemini를 이용한 한국어 요약 ---
+# --- 2. 최신 Gemini SDK를 이용한 한국어 요약 ---
 def summarize_with_gemini(data):
     if not GEMINI_API_KEY:
-        return "Gemini API 키가 설정되지 않았습니다. 데이터를 텍스트로 대체합니다: " + str(data)
+        return "Gemini API 키가 설정되지 않았습니다. 데이터를 수동으로 확인하세요: " + str(data)
     
-    genai.configure(api_key=GEMINI_API_KEY)
-    
-    # 모델 리스트 시도 (안정적인 모델 우선순위)
-    models_to_try = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
-    
-    prompt = f"""
-    아래는 오늘 미국 주식 시장의 섹터별 성과와 거래량이 급증한 종목 데이터야.
-    이 데이터를 바탕으로 한국 주식 투자자가 이해하기 쉽게 한국어로 시장 동향을 요약해줘.
-    
-    조건:
-    1. 현재 가장 '핫한' 테마가 무엇인지 분석할 것.
-    2. 왜 해당 종목/테마가 올랐는지 뉴스나 시장 배경을 추측해서 설명해줄 것 (예: AI 수요 증가, 금리 동결 등).
-    3. '미리 알고 선점하기' 위해 주목해야 할 다음 흐름을 제언할 것.
-    4. 친절하고 전문적인 어조를 사용할 것.
-    
-    데이터:
-    {data}
-    """
-
-    for model_name in models_to_try:
+    try:
+        # 최신 SDK 방식 (google-genai)
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        
+        prompt = f"""
+        아래는 오늘 미국 주식 시장의 섹터별 성과와 거래량이 급증한 종목 데이터야.
+        이 데이터를 바탕으로 한국 주식 투자자가 이해하기 쉽게 한국어로 시장 동향을 요약해줘.
+        
+        조건:
+        1. 현재 가장 '핫한' 테마가 무엇인지 분석할 것.
+        2. 왜 해당 종목/테마가 올랐는지 뉴스나 시장 배경을 추측해서 설명해줄 것 (예: AI 수요 증가, 금리 동결 등).
+        3. '미리 알고 선점하기' 위해 주목해야 할 다음 흐름을 제언할 것.
+        4. 친절하고 전문적인 어조를 사용할 것.
+        
+        데이터:
+        {data}
+        """
+        
+        response = client.models.generate_content(
+            model='gemini-2.0-flash', # 최신 2.0 모델 사용
+            contents=prompt
+        )
+        return response.text
+    except Exception as e:
+        print(f"Gemini API 호출 실패: {e}")
+        # 2.0 실패 시 1.5-flash로 한 번 더 시도
         try:
-            print(f"Trying model: {model_name}...")
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
+            response = client.models.generate_content(
+                model='gemini-1.5-flash',
+                contents=prompt
+            )
             return response.text
-        except Exception as e:
-            print(f"Model {model_name} failed: {e}")
-            continue
-            
-    return "모든 Gemini 모델 호출에 실패했습니다. 데이터를 수동으로 확인하세요: " + str(data)
+        except:
+            return "Gemini API 최종 호출 실패. 데이터를 수동으로 확인하세요: " + str(data)
 
 # --- 3. 이메일 발송 ---
 def send_email(content):
@@ -120,7 +119,7 @@ def send_email(content):
         return
 
     msg = MIMEMultipart()
-    msg['From'] = EMAIL_USER
+    msg['From'] = f"US Stock Notifier <{EMAIL_USER}>"
     msg['To'] = RECEIVER_EMAIL
     msg['Subject'] = f"[{datetime.date.today()}] 미 증시 섹터 및 테마 분석 리포트"
     
@@ -134,12 +133,11 @@ def send_email(content):
     except Exception as e:
         print(f"이메일 발송 실패: {e}")
 
-# --- 실행 ---
 if __name__ == "__main__":
     print("데이터 수집 중...")
     market_data = get_market_data()
     
-    print("Gemini 요약 생성 중...")
+    print("Gemini 요약 생성 중 (최신 SDK)...")
     summary = summarize_with_gemini(market_data)
     
     print("이메일 발송 중...")
