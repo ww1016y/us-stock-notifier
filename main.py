@@ -83,7 +83,9 @@ def summarize_with_gemini(data):
         return "Gemini API 키가 설정되지 않았습니다. 데이터를 텍스트로 대체합니다: " + str(data)
     
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    # 모델 리스트 시도 (안정적인 모델 우선순위)
+    models_to_try = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
     
     prompt = f"""
     아래는 오늘 미국 주식 시장의 섹터별 성과와 거래량이 급증한 종목 데이터야.
@@ -98,12 +100,18 @@ def summarize_with_gemini(data):
     데이터:
     {data}
     """
-    
-    try:
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"요약 중 오류 발생: {e}"
+
+    for model_name in models_to_try:
+        try:
+            print(f"Trying model: {model_name}...")
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            print(f"Model {model_name} failed: {e}")
+            continue
+            
+    return "모든 Gemini 모델 호출에 실패했습니다. 데이터를 수동으로 확인하세요: " + str(data)
 
 # --- 3. 이메일 발송 ---
 def send_email(content):
