@@ -1,11 +1,11 @@
 import yfinance as yf
-import google.generativeai as genai
+import requests
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import os
 import datetime
-import time
+import json
 
 # --- 설정 ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -26,69 +26,58 @@ def get_market_data():
         except: continue
     return "\n".join(report)
 
-def summarize_with_gemini(data):
-    if not GEMINI_API_KEY: return "API Key Missing"
+def summarize_with_gemini_direct(data):
+    """라이브러리를 쓰지 않고 구글 서버에 직접 HTTP 요청을 보냅니다."""
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     
-    genai.configure(api_key=GEMINI_API_KEY)
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        "contents": [{
+            "parts": [{"text": f"다음 주식 데이터를 한국어로 요약해줘:\n{data}"}]
+        }]
+    }
     
-    # [중요] 모든 가능한 모델명 후보군
-    # 구글 API 서버가 인식하는 명칭이 환경마다 다를 수 있어 순회합니다.
-    model_names = [
-        'gemini-1.5-flash',
-        'gemini-1.5-flash-latest',
-        'gemini-pro',
-        'models/gemini-1.5-flash',
-        'models/gemini-pro'
-    ]
-    
-    last_error = ""
-    for name in model_names:
-        try:
-            print(f"Testing model: {name}...")
-            model = genai.GenerativeModel(name)
-            prompt = f"다음 미국 주식 시장 데이터를 한국어로 투자 리포트처럼 요약해줘:\n{data}"
-            response = model.generate_content(prompt)
-            
-            # 응답이 성공적으로 왔는지 검증
-            if response and response.text:
-                print(f"SUCCESS with model: {name}!")
-                return response.text
-        except Exception as e:
-            print(f"FAILED model {name}: {e}")
-            last_error = str(e)
-            continue
-            
-    return f"모든 모델 호출 실패. 최종 에러: {last_error}\n\n데이터:\n{data}"
+    try:
+        print("Sending direct HTTP request to Google Gemini API (v1)...")
+        response = requests.post(url, headers=headers, data=json.dumps(payload))
+        res_json = response.json()
+        
+        if response.status_code == 200:
+            # 성공 시 텍스트 추출
+            summary = res_json['candidates'][0]['content']['parts'][0]['text']
+            print("SUCCESS: AI Summary generated!")
+            return summary
+        else:
+            print(f"FAILED: Status {response.status_code}")
+            print(f"Server Response: {res_json}")
+            return None
+    except Exception as e:
+        print(f"CRITICAL ERROR: {e}")
+        return None
 
 def send_email(content):
-    if not all([EMAIL_USER, EMAIL_PASS, RECEIVER_EMAIL]): return
-    
-    # [방어 로직] 만약 AI 요약이 실패했다면 이메일을 보내지 않고 제가 로그를 더 보게 합니다.
-    if "모든 모델 호출 실패" in content:
-        print("AI Summarization failed. Skipping email to prevent spamming errors.")
-        return
-
+    if not content or not all([EMAIL_USER, EMAIL_PASS, RECEIVER_EMAIL]): return
     msg = MIMEMultipart()
-    msg['From'] = f"US Stock AI <{EMAIL_USER}>"
+    msg['From'] = f"US Stock Notifier <{EMAIL_USER}>"
     msg['To'] = RECEIVER_EMAIL
-    msg['Subject'] = f"[{datetime.date.today()}] 미 증시 AI 분석 리포트 (성공)"
+    msg['Subject'] = f"[{datetime.date.today()}] 미 증시 리포트 (최종 성공)"
     msg.attach(MIMEText(content, 'plain'))
-    
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
             server.login(EMAIL_USER, EMAIL_PASS)
             server.send_message(msg)
-        print("Email Sent Successfully!")
-    except Exception as e:
-        print(f"Email Failed: {e}")
+        print("Email Sent!")
+    except Exception as e: print(f"Email Failed: {e}")
 
 if __name__ == "__main__":
-    print("Step 1: Collecting Market Data...")
+    print("Collecting data...")
     market_data = get_market_data()
     
-    print("Step 2: AI Summarizing (Testing all models)...")
-    summary = summarize_with_gemini(market_data)
+    print("Requesting AI Summary (Direct HTTP)...")
+    summary = summarize_with_gemini_direct(market_data)
     
-    print("Step 3: Sending Result...")
-    send_email(summary)
-    print("Process Finished.")
+    if summary:
+        print("Sending email...")
+        send_email(summary)
+    else:
+        print("Process aborted due to AI failure. Check logs.")
