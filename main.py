@@ -16,123 +16,56 @@ RECEIVER_EMAIL = os.getenv("RECEIVER_EMAIL")
 
 def get_market_data():
     theme_etfs = {
-        "AI/Robotics": "BOTZ",
-        "Semiconductor": "SMH",
-        "Quantum": "QTUM",
-        "Space": "UFO",
-        "Cloud": "SKYY",
-        "Cybersecurity": "CIBR",
-        "Clean Energy": "ICLN",
-        "Biotech": "IBB"
+        "AI/Robotics": "BOTZ", "Semiconductor": "SMH", "Quantum": "QTUM",
+        "Space": "UFO", "Cloud": "SKYY", "Cybersecurity": "CIBR",
+        "Clean Energy": "ICLN", "Biotech": "IBB"
     }
-    
     report_data = []
     for theme, ticker in theme_etfs.items():
         try:
             etf = yf.Ticker(ticker)
             hist = etf.history(period="5d")
             if len(hist) < 2: continue
-            
             price_change = ((hist['Close'].iloc[-1] - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100
-            vol_avg = hist['Volume'].iloc[:-1].mean()
-            vol_today = hist['Volume'].iloc[-1]
-            vol_ratio = vol_today / vol_avg if vol_avg > 0 else 1
-            
-            report_data.append({
-                "Type": "Theme",
-                "Name": theme,
-                "Ticker": ticker,
-                "Change": f"{price_change:.2f}%",
-                "VolRatio": f"{vol_ratio:.2f}x"
-            })
-        except Exception as e:
-            print(f"Error fetching {ticker}: {e}")
-
-    try:
-        trending = yf.Search("Trending", max_results=10).quotes
-        for stock in trending:
-            symbol = stock.get('symbol')
-            if not symbol: continue
-            s = yf.Ticker(symbol)
-            h = s.history(period="2d")
-            if len(h) < 2: continue
-            
-            change = ((h['Close'].iloc[-1] - h['Close'].iloc[-2]) / h['Close'].iloc[-2]) * 100
-            if abs(change) > 3:
-                report_data.append({
-                    "Type": "Stock",
-                    "Name": symbol,
-                    "Ticker": symbol,
-                    "Change": f"{change:.2f}%",
-                    "VolRatio": "Trending"
-                })
-    except Exception as e:
-        print(f"Error fetching trending stocks: {e}")
-        
+            report_data.append({"Type": "Theme", "Name": theme, "Ticker": ticker, "Change": f"{price_change:.2f}%"})
+        except Exception as e: print(f"Error {ticker}: {e}")
     return report_data
 
 def summarize_with_gemini(data):
-    if not GEMINI_API_KEY:
-        return "Gemini API 키가 없습니다."
+    if not GEMINI_API_KEY: return "API Key Missing"
     
-    # 최신 SDK 클라이언트 생성
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    
-    prompt = f"""
-    아래 미국 주식 시장 데이터를 바탕으로 한국 투자자를 위한 요약 리포트를 작성해줘.
-    
-    데이터:
-    {data}
-    
-    조건:
-    1. 현재 가장 핫한 테마 분석.
-    2. 상승/하락 배경 설명.
-    3. 향후 주목할 흐름 제언.
-    4. 친절한 한국어 사용.
-    """
-    
-    # 모델명 후보군 (표준 명칭 사용)
-    # 404 에러를 방지하기 위해 'models/' 접두사를 붙이거나 생략하는 케이스 모두 고려
-    model_candidates = ['gemini-1.5-flash', 'gemini-1.5-pro']
-    
-    for model_id in model_candidates:
-        try:
-            print(f"Final Attempt with model: {model_id}...")
-            response = client.models.generate_content(
-                model=model_id,
-                contents=prompt
-            )
-            if response and response.text:
-                return response.text
-        except Exception as e:
-            print(f"Failed with {model_id}: {e}")
-            time.sleep(2) # 짧은 대기 후 다음 모델 시도
-            
-    return f"AI 요약 시스템 일시 중단. 원본 데이터로 대체합니다.\n\n{data}"
+    try:
+        # 버전 v1 명시 및 클라이언트 생성
+        client = genai.Client(api_key=GEMINI_API_KEY, http_options={'api_version': 'v1'})
+        
+        prompt = f"다음 미국 주식 데이터를 한국어로 요약해줘: {data}"
+        
+        # 가장 안정적인 호출 방식
+        response = client.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt
+        )
+        return response.text
+    except Exception as e:
+        print(f"v1 attempt failed: {e}")
+        return f"AI 요약 실패 (에러: {e})\n\n데이터: {data}"
 
 def send_email(content):
-    if not all([EMAIL_USER, EMAIL_PASS, RECEIVER_EMAIL]):
-        return
-
+    if not all([EMAIL_USER, EMAIL_PASS, RECEIVER_EMAIL]): return
     msg = MIMEMultipart()
     msg['From'] = f"US Stock Notifier <{EMAIL_USER}>"
     msg['To'] = RECEIVER_EMAIL
     msg['Subject'] = f"[{datetime.date.today()}] 미 증시 분석 리포트"
     msg.attach(MIMEText(content, 'plain'))
-    
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
             server.login(EMAIL_USER, EMAIL_PASS)
             server.send_message(msg)
         print("이메일 발송 성공!")
-    except Exception as e:
-        print(f"이메일 발송 실패: {e}")
+    except Exception as e: print(f"이메일 발송 실패: {e}")
 
 if __name__ == "__main__":
-    print("Market Data Collecting...")
     data = get_market_data()
-    print("AI Summarizing...")
     summary = summarize_with_gemini(data)
-    print("Email Sending...")
     send_email(summary)
     print("Done!")
